@@ -33,14 +33,16 @@ function teamKey(value){return String(value||'').normalize('NFKC').toLocaleLower
 function reTeamForSide(side){return side===state?.playerTeam?state.teamName:(state?.reOpponent?.name||'對戰隊伍')}
 function sideLabel(side){return state?.mode==='re'?`${teamName(side)}・${reTeamForSide(side)}`:teamName(side)}
 function reOpponentAvatar(){
- const team=state?.reOpponent?.name,rows=(window.RE_DIALOGUES||[]).filter(x=>x.team&&teamKey(x.team)===teamKey(team)),ids=shuffle([...new Set(rows.map(x=>byName(x.character)?.id).filter(Boolean))]);
+ const team=state?.reOpponent?.sourceName||state?.reOpponent?.name,rows=(window.RE_DIALOGUES||[]).filter(x=>x.team&&teamKey(x.team)===teamKey(team)),ids=shuffle([...new Set(rows.map(x=>byName(x.character)?.id).filter(Boolean))]);
  return ids[0]||state?.reOpponent?.rounds?.flat().map(byName).find(Boolean)?.id||characters[0]?.id;
 }
 function chooseReTeamRecords(){
  const groups=new Map();for(const rec of window.RE_TEAM_DRAFTS||[]){const key=teamKey(rec.name);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(rec)}
- return shuffle([...groups.values()].map(list=>completeReTeamRecord(list[Math.floor(Math.random()*list.length)]))).slice(0,5);
+ const teams=[];for(const list of groups.values()){const ranked=list.slice().sort((a,b)=>recordCompleteness(b)-recordCompleteness(a)).slice(0,2);ranked.forEach((rec,index)=>teams.push(completeReTeamRecord(rec,index?`${rec.name}支隊`:rec.name)))}
+ return shuffle(teams).slice(0,5);
 }
-function completeReTeamRecord(record){const rounds=Array.from({length:5},(_,index)=>[...(record?.rounds?.[index]||[])]),used=new Set(rounds.flat()),available=shuffle(characters.map(c=>c.name).filter(name=>!used.has(name)));while(rounds[4].length<3&&available.length){const name=available.pop();rounds[4].push(name);used.add(name)}return{...record,rounds}}
+function recordCompleteness(record){return Array.from({length:5},(_,index)=>Math.min(3,Array.isArray(record?.rounds?.[index])?record.rounds[index].filter(name=>byName(name)).length:0)).reduce((a,b)=>a+b,0)}
+function completeReTeamRecord(record,displayName=record?.name||'參賽隊伍'){const rounds=[],used=new Set();for(let index=0;index<5;index++){const valid=[...new Set((Array.isArray(record?.rounds?.[index])?record.rounds[index]:[]).filter(name=>byName(name)))].slice(0,3);const available=shuffle(characters.map(c=>c.name).filter(name=>!used.has(name)&&!valid.includes(name)));while(valid.length<3&&available.length)valid.push(available.pop());valid.forEach(name=>used.add(name));rounds.push(valid)}return{...record,name:displayName,sourceName:record?.name||displayName,rounds}}
 function startSeries(){
  const entered=q('playerNameInput').value.trim().slice(0,30),isRe=gameMode==='re';
  if(isRe&&(!entered||!favoriteName)){q('profileError').textContent='請先輸入隊伍名稱並選擇本命角色';return}
@@ -48,7 +50,7 @@ function startSeries(){
  const total=isRe?5:(Number(q('versusSeriesLength').value)||1);
  state={mode:gameMode,total,match:0,matchActive:false,history:[],used:{red:new Set(),blue:new Set()},phase:null,pool:[],banned:new Set(),seats:{red:[null,null,null],blue:[null,null,null]},insert:{red:true,blue:true},log:[],rdHands:null,rdRemoved:{red:new Set(),blue:new Set()},seconds:0,delegated:false,playMode:isRe?'ai':q('versusBattleType').value,learning:isRe?false:learningEnabled,playerTeam:null,marks:{diamond:new Set(),danger:new Set()},suggestions:{active:false,high:new Set(),low:new Set(),highScore:null,lowScore:null,team:null},teamName:playerName,favorite:isRe?favoriteName:'',reTeams:isRe?chooseReTeamRecords():[],rePlayerUsed:new Set(),reFavoriteUsed:false,reFavoriteSeen:0,reOpponent:null};
  q('profileError').textContent='';q('profilePanel').classList.add('hidden');q('gamePanel').classList.add('hidden');q('resultPanel').classList.add('hidden');q('chainResultPanel').classList.add('hidden');q('versusPanel').classList.remove('hidden');
- if(isRe)showReStory();else startMatch();
+ if(isRe)showReStory();else startMatchSafe();
 }
 function showReStory(){
  clearTimeout(storyTimer);const team=state.teamName.endsWith('隊')?state.teamName:`${state.teamName}隊`;
@@ -58,9 +60,10 @@ function showReStory(){
  const draw=()=>{text.innerHTML=lines.map((x,i)=>`<div class="${i===line&&!done?'typing':''}">${esc(i<line||done?x:i===line?x.slice(0,pos):'')}</div>`).join('')};
  const tick=()=>{if(done)return;if(pos<lines[line].length){pos++;draw();storyTimer=setTimeout(tick,46);return}if(line<lines.length-1){line++;pos=0;draw();storyTimer=setTimeout(tick,320);return}done=true;draw();q('reStoryEnter').classList.remove('hidden')};
  const speed=()=>{if(done)return;pos=lines[line].length;draw();clearTimeout(storyTimer);storyTimer=setTimeout(tick,120)};
- const enter=event=>{event?.preventDefault();event?.stopPropagation();if(entering)return;entering=true;clearTimeout(storyTimer);state.matchActive=false;p.innerHTML='';startMatch()};
+ const enter=event=>{event?.preventDefault();event?.stopPropagation();if(entering)return;entering=true;clearTimeout(storyTimer);state.matchActive=false;p.innerHTML='';startMatchSafe()};
  box.onclick=e=>{if(e.target.id==='reStoryEnter')enter(e);else speed()};box.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();speed()}};q('reStorySkip').addEventListener('click',enter,{once:true});draw();tick();
 }
+function startMatchSafe(){for(let attempt=0;attempt<3;attempt++){try{startMatch();return true}catch(error){console.error(`第 ${state?.history?.length+1||1} 場載入失敗（第 ${attempt+1} 次）：`,error);clearInterval(timerId);state.matchActive=false;if(state?.mode==='re'&&state.reTeams){const replacement=chooseReTeamRecords()[0];if(replacement)state.reTeams[state.history.length]=replacement}}}const p=q('versusPanel');if(p)p.innerHTML=`<div class="vs-result"><div class="vs-title">本場資料載入失敗</div><p>系統已排除異常隊伍，請按下方按鈕重新抽選對手。</p><button id="vsRecover" class="vs-btn">重新載入本場</button><button id="vsHome" class="vs-btn">回到首頁</button></div>`;if(q('vsRecover'))q('vsRecover').onclick=startMatchSafe;if(q('vsHome'))q('vsHome').onclick=quit;return false}
 function startMatch(){
  if(state.matchActive)return;if(state.history.length>=state.total){if(state.mode==='re')renderReFinal();return}state.matchActive=true;state.match=state.history.length+1;state.banned=new Set();state.seats={red:[null,null,null],blue:[null,null,null]};state.insert={red:true,blue:true};state.log=[];state.delegated=false;state.suggestions={active:false,high:new Set(),low:new Set(),highScore:null,lowScore:null,team:null};state.playerTeam=state.playMode==='ai'?(Math.random()<.5?'red':'blue'):null;
  if(state.mode==='re'){
@@ -133,9 +136,9 @@ function finishMatch(){
    if(hasFav&&Math.abs(rawPlayer-rawCpu)>=40){if(state.playerTeam==='red')rs=rawCpu+1;else bs=rawCpu+1;rec.bondComeback=true}
    if(rs===bs){const luckySide=Math.random()<.5?'red':'blue',raise=Math.random()<.5;if(raise){if(luckySide==='red')rs++;else bs++}else{if(luckySide==='red')bs=Math.max(0,bs-1);else rs=Math.max(0,rs-1)}if(rs===bs){if(luckySide==='red')rs++;else bs++}rec.tieBreak=true}
    rec.rs=rs;rec.bs=bs;const winningSide=rs>bs?'red':'blue',playerWon=winningSide===state.playerTeam;rec.reWinner=playerWon?'player':'cpu';rec.playerTeam=state.playerTeam;rec.favoriteUsed=hasFav;
-   rec.trash=trashTalk(rec);const winnerIds=rec[winningSide],winnerTeam=reTeamForSide(winningSide);
+   rec.trash=trashTalk(rec);const winnerIds=rec[winningSide],winnerTeam=reTeamForSide(winningSide),dialogueTeam=winningSide===state.playerTeam?winnerTeam:(state.reOpponent?.sourceName||winnerTeam);
    if(rec.bondComeback){const fav=byName(state.favorite);rec.reQuote={id:fav.id,name:fav.name,text:'真是受不了你呢，都傷痕累累還要硬拼。',by:`來自 ${fav.name} 無盡的羈絆`,bond:true}}
-   else{const charId=winnerIds[Math.floor(Math.random()*winnerIds.length)],char=byId(charId),fallback=rec.trash[Math.floor(Math.random()*rec.trash.length)];rec.reQuote={id:charId,name:char.name,text:reDialogueFor(winnerTeam,char.name,fallback),by:`${winnerTeam}`}}
+   else{const charId=winnerIds[Math.floor(Math.random()*winnerIds.length)],char=byId(charId),fallback=rec.trash[Math.floor(Math.random()*rec.trash.length)];rec.reQuote={id:charId,name:char.name,text:reDialogueFor(dialogueTeam,char.name,fallback),by:`${winnerTeam}`}}
  }else{
    rec.trash=trashTalk(rec);
  }
@@ -158,7 +161,7 @@ function cpuPrivateRemoval(){const team=state.phase.controller,hand=[...state.rd
 function reCpuCandidate(team){
  const available=candidateIds(team),pickNo=state.seats[team].filter(Boolean).length,script=state.reOpponent?.rounds?.[state.match-1]||[],wanted=byName(script[pickNo]);
  if(wanted&&available.includes(wanted.id))return wanted.id;
- const talkers=[...new Set((window.RE_DIALOGUES||[]).filter(x=>x.team&&teamKey(x.team)===teamKey(state.reOpponent?.name)).map(x=>byName(x.character)?.id).filter(id=>available.includes(id)))];
+ const talkers=[...new Set((window.RE_DIALOGUES||[]).filter(x=>x.team&&teamKey(x.team)===teamKey(state.reOpponent?.sourceName||state.reOpponent?.name)).map(x=>byName(x.character)?.id).filter(id=>available.includes(id)))];
  const pool=talkers.length?talkers:available;return pool[Math.floor(Math.random()*pool.length)];
 }
 function maybeCpuAct(){
@@ -191,7 +194,7 @@ function render(free){const p=q('versusPanel'),phase=state.phase;if(state.pendin
  const pendingCard=p.querySelector('.vs-card.pending-seat');if(pendingCard)pendingCard.disabled=false;p.querySelectorAll('.vs-card:not(:disabled)').forEach(b=>b.onclick=()=>choose(Number(b.dataset.id)));p.querySelectorAll('.vs-map-seat.target').forEach(e=>e.onclick=()=>placePick(Number(e.dataset.seat)));if(q('vsSkip'))q('vsSkip').onclick=skipBan;if(q('vsInsert'))q('vsInsert').onclick=useInsert;q('vsQuit').onclick=()=>{if(confirm('確定結束本次連戰並回到首頁？'))quit()};renderTimer();maybeCpuAct();}
 function avatarRow(ids,large=false,mine=false,label=''){return`<div class="re-lineup-wrap ${mine?'mine':''}"><div class="${large?'vs-result-avatars':'vs-mini-avatars'}">${ids.map(id=>{const c=byId(id);return`<img src="${c.image}" alt="${esc(c.name)}" title="${esc(c.name)}">`}).join('')}</div>${label?`<div class="re-lineup-team">${esc(label)}</div>`:''}</div>`}
 function trashTalk(rec){const red=rec.red.map(byId),blue=rec.blue.map(byId),lines=[];try{if(typeof chainRoleTrashTalks==='function')chainRoleTrashTalks({player:red,cpu:blue,specialAudience:[]}).slice(0,2).forEach(x=>lines.push(x))}catch(e){}const winner=rec.rs===rec.bs?'雙方打得難分難解，觀眾決定把鍋留給下一場。':rec.rs>rec.bs?'藍方選完才發現，真正被 Ban 掉的是自己的勝算。':'紅方握有 First Player，卻把勝利先手讓給了藍方。';lines.unshift(winner);return lines.slice(0,3)}
-function wireNextButton(finalAction){const button=q('vsNext');if(!button)return;button.type='button';button.onclick=event=>{event.preventDefault();if(button.dataset.busy==='1')return;button.dataset.busy='1';button.disabled=true;button.textContent='載入中…';clearInterval(timerId);state.matchActive=false;try{if(state.history.length>=state.total)finalAction();else startMatch()}catch(error){console.error('切換下一場失敗：',error);button.dataset.busy='0';button.disabled=false;button.textContent=state.history.length>=state.total?'查看最終結算':'下一場';alert('載入下一場失敗，請再按一次。')}}}
+function wireNextButton(finalAction){const button=q('vsNext');if(!button)return;button.type='button';button.onclick=event=>{event.preventDefault();if(button.dataset.busy==='1')return;button.dataset.busy='1';button.disabled=true;button.textContent='載入中…';clearInterval(timerId);state.matchActive=false;if(state.history.length>=state.total)finalAction();else startMatchSafe()}}
 function renderResult(rs,bs){
  const last=state.history.at(-1),winner=rs===bs?'平手':rs>bs?'紅方勝':'藍方勝';
  if(state.mode==='re'){
